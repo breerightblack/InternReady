@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 
 const STEPS = ["Personal", "Education", "Experience", "Skills", "Preview"];
 
@@ -10,6 +10,37 @@ const initialForm = {
   skills: "", certifications: "", targetRole: ""
 };
 
+// Parse plain-text resume into structured sections for styled rendering
+function parseResume(text) {
+  const lines = text.split("\n");
+  const sections = [];
+  let current = null;
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) {
+      if (current) current.items.push({ type: "spacer" });
+      continue;
+    }
+    // ALL CAPS line = section header
+    if (line === line.toUpperCase() && line.length > 2 && !/^[\d\W]+$/.test(line)) {
+      if (current) sections.push(current);
+      current = { header: line, items: [] };
+    } else if (current) {
+      const isBullet = line.startsWith("•") || line.startsWith("-") || line.startsWith("*");
+      current.items.push({
+        type: isBullet ? "bullet" : "text",
+        content: isBullet ? line.replace(/^[•\-\*]\s*/, "") : line
+      });
+    } else {
+      // Pre-header content (name/contact block)
+      sections.push({ header: null, items: [{ type: "text", content: line }] });
+    }
+  }
+  if (current) sections.push(current);
+  return sections;
+}
+
 export default function App() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState(initialForm);
@@ -17,6 +48,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
+  const [lastGenerated, setLastGenerated] = useState(null);
+  const printRef = useRef(null);
 
   const update = (field, value) => setForm(f => ({ ...f, [field]: value }));
 
@@ -33,6 +66,14 @@ export default function App() {
   };
 
   const generateResume = async () => {
+    // Client-side rate limiting: 30 second cooldown
+    if (lastGenerated && Date.now() - lastGenerated < 30000) {
+      const remaining = Math.ceil((30000 - (Date.now() - lastGenerated)) / 1000);
+      setError(`Please wait ${remaining} seconds before generating again.`);
+      setStep(4);
+      return;
+    }
+
     setLoading(true);
     setError("");
     setStep(4);
@@ -56,14 +97,20 @@ Skills: ${form.skills}
 Certifications: ${form.certifications}
 
 Format as a clean, professional resume with these sections:
-1. Header (name + contact)
-2. Education
-3. Relevant Experience (use strong action verbs, quantify achievements)
-4. Projects
-5. Technical Skills
-6. Certifications (if any)
+1. Header (name + contact) - put name on first line, contact info on second line
+2. EDUCATION
+3. RELEVANT EXPERIENCE (use strong action verbs, quantify achievements where possible)
+4. PROJECTS
+5. TECHNICAL SKILLS
+6. CERTIFICATIONS (if any, otherwise omit this section)
 
-Use plain text formatting with clear section headers in ALL CAPS. Make bullet points start with strong action verbs. Tailor everything toward ${form.targetRole || "internship"} roles. Make it compelling for a college student with limited experience.`;
+Rules:
+- Section headers must be in ALL CAPS on their own line
+- Bullet points must start with • (bullet character)
+- Use strong action verbs for all bullet points
+- Tailor everything toward ${form.targetRole || "internship"} roles
+- Make it compelling for a college student with limited experience
+- Keep it to one page worth of content`;
 
     try {
       const res = await fetch("/.netlify/functions/generate-resume", {
@@ -81,6 +128,7 @@ Use plain text formatting with clear section headers in ALL CAPS. Make bullet po
       }
 
       setResume(data.content[0].text);
+      setLastGenerated(Date.now());
     } catch (e) {
       setError(e.message || "Error generating resume. Please try again.");
       setResume("");
@@ -95,11 +143,47 @@ Use plain text formatting with clear section headers in ALL CAPS. Make bullet po
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const inputClass = "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white";
-  const labelClass = "block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1";
+  const downloadPDF = () => {
+    const printWindow = window.open("", "_blank");
+    const resumeHTML = printRef.current?.innerHTML || "";
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>${form.name || "Resume"} - Resume</title>
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: 'Times New Roman', serif; font-size: 11pt; line-height: 1.4; color: #000; padding: 0.75in; }
+            .resume-name { font-size: 18pt; font-weight: bold; text-align: center; margin-bottom: 4px; }
+            .resume-contact { text-align: center; font-size: 10pt; margin-bottom: 16px; color: #333; }
+            .resume-section-header { font-size: 11pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1.5px solid #000; padding-bottom: 2px; margin: 14px 0 6px; }
+            .resume-text { margin: 2px 0; font-size: 10.5pt; }
+            .resume-bullet { margin: 2px 0 2px 16px; font-size: 10.5pt; }
+            .resume-bullet::before { content: "•"; margin-right: 6px; }
+            @media print { body { padding: 0.5in; } }
+          </style>
+        </head>
+        <body>${resumeHTML}</body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => { printWindow.print(); printWindow.close(); }, 500);
+  };
+
+  const sections = resume ? parseResume(resume) : [];
 
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", fontFamily: "'Inter', sans-serif" }}>
+      {/* Print styles */}
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #print-area, #print-area * { visibility: visible; }
+          #print-area { position: fixed; top: 0; left: 0; width: 100%; padding: 0.75in; background: white; }
+        }
+      `}</style>
+
       {/* Header */}
       <div style={{ background: "rgba(255,255,255,0.1)", backdropFilter: "blur(10px)", borderBottom: "1px solid rgba(255,255,255,0.2)" }}>
         <div style={{ maxWidth: 800, margin: "0 auto", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -142,8 +226,8 @@ Use plain text formatting with clear section headers in ALL CAPS. Make bullet po
                   ["targetRole","Target Internship Role","Software Engineering Intern"]
                 ].map(([field, label, ph]) => (
                   <div key={field} style={field === "targetRole" ? { gridColumn: "1/-1" } : {}}>
-                    <label className={labelClass} style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>{label}</label>
-                    <input className={inputClass} style={{ width: "100%", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", fontSize: 14, outline: "none", boxSizing: "border-box" }}
+                    <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>{label}</label>
+                    <input style={{ width: "100%", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", fontSize: 14, outline: "none", boxSizing: "border-box" }}
                       placeholder={ph} value={form[field]} onChange={e => update(field, e.target.value)} />
                   </div>
                 ))}
@@ -179,7 +263,6 @@ Use plain text formatting with clear section headers in ALL CAPS. Make bullet po
             <div>
               <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>💼 Experience & Projects</h2>
               <p style={{ color: "#6b7280", fontSize: 14, marginBottom: 20 }}>Jobs, internships, clubs — anything counts!</p>
-
               {form.experience.map((exp, i) => (
                 <div key={i} style={{ background: "#f9fafb", borderRadius: 12, padding: 16, marginBottom: 12 }}>
                   <div style={{ fontWeight: 600, fontSize: 13, color: "#374151", marginBottom: 12 }}>Experience #{i+1}</div>
@@ -204,7 +287,6 @@ Use plain text formatting with clear section headers in ALL CAPS. Make bullet po
                 style={{ fontSize: 13, color: "#6366f1", fontWeight: 600, background: "none", border: "2px dashed #c7d2fe", borderRadius: 8, padding: "8px 16px", cursor: "pointer", width: "100%", marginBottom: 20 }}>
                 + Add Another Experience
               </button>
-
               <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: 20 }}>
                 <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>🚀 Projects</div>
                 {form.projects.map((proj, i) => (
@@ -267,8 +349,9 @@ Use plain text formatting with clear section headers in ALL CAPS. Make bullet po
                 {loading ? "⏳ Generating your resume..." : error ? "❌ Something went wrong" : "✅ Your Resume is Ready!"}
               </h2>
               <p style={{ color: "#6b7280", fontSize: 14, marginBottom: 20 }}>
-                {loading ? "Our AI is crafting a tailored internship resume for you..." : error ? error : "Copy and paste into a Word doc or Google Docs to format."}
+                {loading ? "Our AI is crafting a tailored internship resume for you..." : error ? "" : "Download as PDF or copy the text below."}
               </p>
+
               {loading ? (
                 <div style={{ textAlign: "center", padding: 60 }}>
                   <div style={{ fontSize: 48, marginBottom: 16 }}>✨</div>
@@ -286,19 +369,79 @@ Use plain text formatting with clear section headers in ALL CAPS. Make bullet po
                 </div>
               ) : (
                 <>
-                  <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                  {/* Action buttons */}
+                  <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+                    <button onClick={downloadPDF}
+                      style={{ flex: 1, background: "linear-gradient(135deg, #667eea, #764ba2)", color: "white", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+                      ⬇️ Download PDF
+                    </button>
                     <button onClick={copyToClipboard}
-                      style={{ flex: 1, background: copied ? "#16a34a" : "#6366f1", color: "white", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
-                      {copied ? "✅ Copied!" : "📋 Copy Resume"}
+                      style={{ flex: 1, background: copied ? "#16a34a" : "#f3f4f6", color: copied ? "white" : "#374151", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+                      {copied ? "✅ Copied!" : "📋 Copy Text"}
                     </button>
                     <button onClick={() => { setStep(0); setResume(""); setError(""); }}
                       style={{ background: "#f3f4f6", color: "#374151", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
                       🔄 Start Over
                     </button>
                   </div>
-                  <pre style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 12, padding: 20, fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap", fontFamily: "monospace", maxHeight: 500, overflow: "auto" }}>
-                    {resume}
-                  </pre>
+
+                  {/* Styled resume preview */}
+                  <div id="print-area" ref={printRef}
+                    style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 12, padding: "32px 36px", fontFamily: "'Times New Roman', serif", fontSize: 13, lineHeight: 1.5, color: "#111" }}>
+                    {sections.map((section, si) => (
+                      <div key={si}>
+                        {section.header === null ? (
+                          // Name/contact header block
+                          section.items.map((item, ii) => (
+                            <div key={ii} style={{
+                              textAlign: "center",
+                              fontWeight: ii === 0 ? 700 : 400,
+                              fontSize: ii === 0 ? 20 : 12,
+                              color: ii === 0 ? "#111" : "#555",
+                              marginBottom: ii === 0 ? 4 : 12,
+                              fontFamily: ii === 0 ? "'Inter', sans-serif" : "inherit"
+                            }}>
+                              {item.content}
+                            </div>
+                          ))
+                        ) : (
+                          <div style={{ marginBottom: 12 }}>
+                            <div style={{
+                              fontSize: 11,
+                              fontWeight: 700,
+                              textTransform: "uppercase",
+                              letterSpacing: "0.08em",
+                              borderBottom: "1.5px solid #111",
+                              paddingBottom: 3,
+                              marginBottom: 6,
+                              fontFamily: "'Inter', sans-serif",
+                              color: "#111"
+                            }}>
+                              {section.header}
+                            </div>
+                            {section.items.map((item, ii) => {
+                              if (item.type === "spacer") return <div key={ii} style={{ height: 4 }} />;
+                              if (item.type === "bullet") return (
+                                <div key={ii} style={{ display: "flex", gap: 8, marginBottom: 2, paddingLeft: 8 }}>
+                                  <span style={{ flexShrink: 0, marginTop: 1 }}>•</span>
+                                  <span>{item.content}</span>
+                                </div>
+                              );
+                              return <div key={ii} style={{ marginBottom: 2 }}>{item.content}</div>;
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Regenerate option */}
+                  <div style={{ textAlign: "center", marginTop: 16 }}>
+                    <button onClick={generateResume}
+                      style={{ background: "none", border: "none", color: "#6366f1", fontSize: 13, fontWeight: 600, cursor: "pointer", textDecoration: "underline" }}>
+                      🔁 Regenerate resume
+                    </button>
+                  </div>
                 </>
               )}
             </div>
