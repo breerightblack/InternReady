@@ -128,7 +128,7 @@ export default function App() {
       setError("Please wait " + remaining + " seconds before generating again.");
       setStep(4); return;
     }
-    setLoading(true); setError(""); setStep(4);
+    const missing = [];    if (!form.name.trim()) missing.push("Full Name");
     const prompt = "You are an expert resume writer specializing in college student internship resumes. Generate a professional, ATS-optimized resume based on this info:\n\n" +
       "Name: " + form.name + "\n" +
       "Email: " + form.email + " | Phone: " + form.phone + " | LinkedIn: " + form.linkedin + "\n" +
@@ -153,7 +153,11 @@ export default function App() {
   };
 
   const copyToClipboard = () => { navigator.clipboard.writeText(resume); setCopied(true); setTimeout(() => setCopied(false), 2000); };
-
+const openInGoogleDocs = () => {
+      navigator.clipboard.writeText(resume || "");
+      window.open("https://docs.google.com/document/create?title=" + encodeURIComponent((form.name || "Resume") + " - Resume"), "_blank");
+      alert("Resume text copied to clipboard! Paste it into the new Google Doc with Ctrl+V / Cmd+V.");
+};
   const downloadPDF = () => {
     const pw = window.open("", "_blank");
     const html = printRef.current?.innerHTML || "";
@@ -165,12 +169,7 @@ export default function App() {
     setTimeout(() => { pw.print(); pw.close(); }, 800);
   };
 
-  const openInGoogleDocs = () => {
-    const text = resume || "";
-    const encoded = encodeURIComponent(text);
-    window.open("https://docs.google.com/document/create?title=" + encodeURIComponent((form.name || "Resume") + " - Resume") + "&body=" + encoded, "_blank");
-  };
-
+  
   const downloadWord = () => {
     const text = resume || "";
     const header = "<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><style>body{font-family:" + font.value + ";font-size:11pt;line-height:1.5;color:#1a202c;margin:0.75in}</style></head><body>";
